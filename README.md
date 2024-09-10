@@ -1,7 +1,6 @@
 ### About:
 
-This is a real-time chat application built using React (Create React App on the frontend), NodeJS/Express/Socket.io (as Backend) and MongoDB (as database).
-Users are able to join groups and message other users in real-time.
+The MERN Stack Real-Time Group Chat Web Application includes a range of key features designed for an intuitive and dynamic user experience. The platform supports secure user authentication with registration and login, using bcrypt for password encryption. Users can create and join multiple chat groups, allowing real-time messaging powered by Socket.IO. The chat interface includes message notifications, typing indicators, and media sharing (images, emojis, etc.). Additionally, the app offers a user-friendly UI built with React, ensuring seamless navigation between groups and chats. The application also features a persistent chat history stored in MongoDB, allowing users to retrieve past conversations. All interactions are secured with proper data validation, error handling, and cross-origin resource sharing (CORS) configurations for reliable and safe communication.
 
 ### Tech Stack:
 
