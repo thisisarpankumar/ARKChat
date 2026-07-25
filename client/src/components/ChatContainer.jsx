@@ -5,11 +5,23 @@ import Logout from "./Logout";
 import { v4 as uuidv4 } from "uuid";
 import axios from "axios";
 import { sendMessageRoute, recieveMessageRoute } from "../utils/APIRoutes";
+import { decryptMessage, encryptMessage } from "../utils/encryption";
 
 export default function ChatContainer({ currentChat, socket }) {
   const [messages, setMessages] = useState([]);
   const scrollRef = useRef();
   const [arrivalMessage, setArrivalMessage] = useState(null);
+  const [sharedSecret, setSharedSecret] = useState("");
+
+  useEffect(() => {
+    const currentUser = JSON.parse(
+      localStorage.getItem(process.env.REACT_APP_LOCALHOST_KEY) || "{}"
+    );
+    const storageKey = `arkchat_shared_secret_${currentUser._id || "default"}_${currentChat?._id || "default"}`;
+    const storedSecret = localStorage.getItem(storageKey) || "arkchat-shared-secret";
+    localStorage.setItem(storageKey, storedSecret);
+    setSharedSecret(storedSecret);
+  }, [currentChat]);
 
   useEffect(async () => {
     const data = await JSON.parse(
@@ -19,8 +31,20 @@ export default function ChatContainer({ currentChat, socket }) {
       from: data._id,
       to: currentChat._id,
     });
-    setMessages(response.data);
-  }, [currentChat]);
+
+    const decryptedMessages = await Promise.all(
+      response.data.map(async (message) => {
+        try {
+          const decrypted = await decryptMessage(message.message, sharedSecret);
+          return { ...message, message: decrypted };
+        } catch (error) {
+          return { ...message, message: "[Unable to decrypt]" };
+        }
+      })
+    );
+
+    setMessages(decryptedMessages);
+  }, [currentChat, sharedSecret]);
 
   useEffect(() => {
     const getCurrentChat = async () => {
@@ -33,19 +57,32 @@ export default function ChatContainer({ currentChat, socket }) {
     getCurrentChat();
   }, [currentChat]);
 
+  const handleSecretChange = (event) => {
+    const value = event.target.value;
+    const currentUser = JSON.parse(
+      localStorage.getItem(process.env.REACT_APP_LOCALHOST_KEY) || "{}"
+    );
+    const storageKey = `arkchat_shared_secret_${currentUser._id || "default"}_${currentChat?._id || "default"}`;
+    const nextSecret = value || "arkchat-shared-secret";
+    localStorage.setItem(storageKey, nextSecret);
+    setSharedSecret(nextSecret);
+  };
+
   const handleSendMsg = async (msg) => {
     const data = await JSON.parse(
       localStorage.getItem(process.env.REACT_APP_LOCALHOST_KEY)
     );
+    const encrypted = await encryptMessage(msg, sharedSecret);
+
     socket.current.emit("send-msg", {
       to: currentChat._id,
       from: data._id,
-      msg,
+      msg: encrypted,
     });
     await axios.post(sendMessageRoute, {
       from: data._id,
       to: currentChat._id,
-      message: msg,
+      message: encrypted,
     });
 
     const msgs = [...messages];
@@ -55,11 +92,16 @@ export default function ChatContainer({ currentChat, socket }) {
 
   useEffect(() => {
     if (socket.current) {
-      socket.current.on("msg-recieve", (msg) => {
-        setArrivalMessage({ fromSelf: false, message: msg });
+      socket.current.on("msg-recieve", async (msg) => {
+        try {
+          const decrypted = await decryptMessage(msg, sharedSecret);
+          setArrivalMessage({ fromSelf: false, message: decrypted });
+        } catch (error) {
+          setArrivalMessage({ fromSelf: false, message: "[Unable to decrypt]" });
+        }
       });
     }
-  }, []);
+  }, [sharedSecret]);
 
   useEffect(() => {
     arrivalMessage && setMessages((prev) => [...prev, arrivalMessage]);
@@ -83,7 +125,16 @@ export default function ChatContainer({ currentChat, socket }) {
             <h3>{currentChat.username}</h3>
           </div>
         </div>
-        <Logout />
+        <div className="chat-controls">
+          <input
+            type="password"
+            value={sharedSecret}
+            onChange={handleSecretChange}
+            placeholder="Shared secret"
+            aria-label="Shared secret"
+          />
+          <Logout />
+        </div>
       </div>
       <div className="chat-messages">
         {messages.map((message) => {
@@ -122,6 +173,21 @@ const Container = styled.div`
     background-color: rgb(76, 46, 209);
     align-items: center;
     padding: 0 2rem;
+    .chat-controls {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      input {
+        border: none;
+        border-radius: 0.5rem;
+        padding: 0.4rem 0.7rem;
+        background-color: rgba(255, 255, 255, 0.2);
+        color: white;
+        &::placeholder {
+          color: rgba(255, 255, 255, 0.7);
+        }
+      }
+    }
     .user-details {
       display: flex;
       align-items: center;
