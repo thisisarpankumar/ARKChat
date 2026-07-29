@@ -13,6 +13,7 @@ module.exports.getMessages = async (req, res, next) => {
     const projectedMessages = messages.map((msg) => {
       return {
         fromSelf: msg.sender.toString() === from,
+        // msg.message.text is an object { ciphertext, nonce, senderPublicKey }
         message: msg.message.text,
       };
     });
@@ -25,6 +26,7 @@ module.exports.getMessages = async (req, res, next) => {
 module.exports.addMessage = async (req, res, next) => {
   try {
     const { from, to, message } = req.body;
+    // message is expected to be an object: {ciphertext, nonce, senderPublicKey}
     const data = await Messages.create({
       message: { text: message },
       users: [from, to],

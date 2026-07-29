@@ -41,11 +41,13 @@ module.exports.register = async (req, res, next) => {
 
 module.exports.getAllUsers = async (req, res, next) => {
   try {
+    // include publicKey so the client can encrypt to other users
     const users = await User.find({ _id: { $ne: req.params.id } }).select([
       "email",
       "username",
       "avatarImage",
       "_id",
+      "publicKey",
     ]);
     return res.json(users);
   } catch (ex) {
@@ -81,5 +83,16 @@ module.exports.logOut = (req, res, next) => {
     return res.status(200).send();
   } catch (ex) {
     next(ex);
+  }
+};
+
+module.exports.setPublicKey = async (req, res, next) => {
+  try {
+    const { publicKey } = req.body;
+    const userId = req.params.id;
+    await User.findByIdAndUpdate(userId, { publicKey });
+    return res.json({ msg: "Public key saved" });
+  } catch (err) {
+    next(err);
   }
 };

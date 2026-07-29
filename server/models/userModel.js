@@ -27,6 +27,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: "",
   },
+  publicKey: {
+    type: String,
+    default: "",
+  },
 });
 
 module.exports = mongoose.model("Users", userSchema);

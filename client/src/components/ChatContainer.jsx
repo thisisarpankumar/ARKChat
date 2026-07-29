@@ -1,52 +1,114 @@
+// client/src/components/ChatContainer.jsx
 import React, { useState, useEffect, useRef } from "react";
 import styled from "styled-components";
 import ChatInput from "./ChatInput";
 import { v4 as uuidv4 } from "uuid";
 import axios from "axios";
-import { sendMessageRoute, recieveMessageRoute } from "../utils/APIRoutes";
+import { sendMessageRoute, recieveMessageRoute, host } from "../utils/APIRoutes";
+import { encryptMessageBase64, decryptMessageBase64, generateKeyPairBase64 } from "../utils/crypto";
 
 export default function ChatContainer({ currentChat, socket }) {
   const [messages, setMessages] = useState([]);
   const scrollRef = useRef();
   const [arrivalMessage, setArrivalMessage] = useState(null);
 
+  // Ensure E2EE keys exist for this client and publicKey uploaded
+  useEffect(() => {
+    const initKeys = async () => {
+      const localUser = await JSON.parse(localStorage.getItem(process.env.REACT_APP_LOCALHOST_KEY));
+      if (!localUser) return;
+      let keys = JSON.parse(localStorage.getItem("e2ee_keys"));
+      if (!keys) {
+        keys = generateKeyPairBase64();
+        // WARNING: secretKey in localStorage is convenient but vulnerable to XSS.
+        localStorage.setItem("e2ee_keys", JSON.stringify(keys));
+        // Upload public key to server
+        try {
+          await axios.post(`${host}/api/auth/setpubkey/${localUser._id}`, { publicKey: keys.publicKey });
+        } catch (e) {
+          console.error("Failed to upload public key:", e);
+        }
+      }
+    };
+    initKeys();
+  }, []);
+
   useEffect(async () => {
-    const data = await JSON.parse(
-      localStorage.getItem(process.env.REACT_APP_LOCALHOST_KEY)
-    );
+    if (!currentChat) return;
+    const data = await JSON.parse(localStorage.getItem(process.env.REACT_APP_LOCALHOST_KEY));
     const response = await axios.post(recieveMessageRoute, {
       from: data._id,
       to: currentChat._id,
     });
-    setMessages(response.data);
+
+    // decrypt each message
+    const keys = JSON.parse(localStorage.getItem("e2ee_keys"));
+    const decrypted = response.data.map((msg) => {
+      // msg.message is an object {ciphertext, nonce, senderPublicKey}
+      const contentObj = msg.message;
+      let plaintext = "[could not decrypt]";
+      if (contentObj && keys) {
+        const dec = decryptMessageBase64(
+          contentObj.ciphertext,
+          contentObj.nonce,
+          contentObj.senderPublicKey,
+          keys.secretKey
+        );
+        plaintext = dec || plaintext;
+      }
+      return { fromSelf: msg.fromSelf, message: plaintext };
+    });
+
+    setMessages(decrypted);
   }, [currentChat]);
 
   useEffect(() => {
     const getCurrentChat = async () => {
       if (currentChat) {
-        await JSON.parse(
-          localStorage.getItem(process.env.REACT_APP_LOCALHOST_KEY)
-        )._id;
+        await JSON.parse(localStorage.getItem(process.env.REACT_APP_LOCALHOST_KEY))._id;
       }
     };
     getCurrentChat();
   }, [currentChat]);
 
   const handleSendMsg = async (msg) => {
-    const data = await JSON.parse(
-      localStorage.getItem(process.env.REACT_APP_LOCALHOST_KEY)
-    );
+    const data = await JSON.parse(localStorage.getItem(process.env.REACT_APP_LOCALHOST_KEY));
+    const keys = JSON.parse(localStorage.getItem("e2ee_keys"));
+    if (!keys) {
+      console.error("No E2EE keys available.");
+      return;
+    }
+    const recipientPub = currentChat.publicKey;
+    if (!recipientPub) {
+      console.error("Recipient public key not available. Cannot encrypt.");
+      return;
+    }
+
+    const encrypted = encryptMessageBase64(msg, keys.secretKey, recipientPub);
+
+    // Send via socket (encrypted payload)
     socket.current.emit("send-msg", {
       to: currentChat._id,
       from: data._id,
-      msg,
+      msg: {
+        ciphertext: encrypted.ciphertext,
+        nonce: encrypted.nonce,
+        senderPublicKey: keys.publicKey,
+      },
     });
+
+    // Store ciphertext on server
     await axios.post(sendMessageRoute, {
       from: data._id,
       to: currentChat._id,
-      message: msg,
+      message: {
+        ciphertext: encrypted.ciphertext,
+        nonce: encrypted.nonce,
+        senderPublicKey: keys.publicKey,
+      },
     });
 
+    // Update local UI with plaintext immediately
     const msgs = [...messages];
     msgs.push({ fromSelf: true, message: msg });
     setMessages(msgs);
@@ -54,8 +116,25 @@ export default function ChatContainer({ currentChat, socket }) {
 
   useEffect(() => {
     if (socket.current) {
-      socket.current.on("msg-recieve", (msg) => {
-        setArrivalMessage({ fromSelf: false, message: msg });
+      socket.current.on("msg-recieve", (msgObj) => {
+        try {
+          const keys = JSON.parse(localStorage.getItem("e2ee_keys"));
+          if (!keys) {
+            setArrivalMessage({ fromSelf: false, message: "[encrypted message]" });
+            return;
+          }
+          const contentObj = msgObj; // {ciphertext, nonce, senderPublicKey}
+          const plaintext = decryptMessageBase64(
+            contentObj.ciphertext,
+            contentObj.nonce,
+            contentObj.senderPublicKey,
+            keys.secretKey
+          );
+          setArrivalMessage({ fromSelf: false, message: plaintext || "[could not decrypt]" });
+        } catch (e) {
+          console.error("Error decrypting incoming message:", e);
+          setArrivalMessage({ fromSelf: false, message: "[could not decrypt]" });
+        }
       });
     }
   }, []);
@@ -73,26 +152,18 @@ export default function ChatContainer({ currentChat, socket }) {
       <div className="chat-header">
         <div className="user-details">
           <div className="avatar">
-            <img
-              src={currentChat.avatarImage}
-              alt=""
-            />
+            <img src={currentChat.avatarImage} alt="" />
           </div>
           <div className="username">
             <h3>{currentChat.username}</h3>
           </div>
         </div>
-        
       </div>
       <div className="chat-messages">
         {messages.map((message) => {
           return (
             <div ref={scrollRef} key={uuidv4()}>
-              <div
-                className={`message ${
-                  message.fromSelf ? "sended" : "recieved"
-                }`}
-              >
+              <div className={`message ${message.fromSelf ? "sended" : "recieved"}`}>
                 <div className="content ">
                   <p>{message.message}</p>
                 </div>
@@ -117,69 +188,5 @@ const Container = styled.div`
   .chat-header {
     display: flex;
     justify-content: space-between;
-    border-radius: 5px;
-    background-color: rgb(76, 46, 209);
-    align-items: center;
-    padding: 0 2rem;
-    .user-details {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      .avatar {
-        img {
-          height: 3rem;
-        }
-      }
-      .username {
-        h3 {
-          color: white;
-        }
-      }
-    }
-  }
-  .chat-messages {
-    padding: 1rem 2rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    overflow: auto;
-    &::-webkit-scrollbar {
-      width: 0.2rem;
-      &-thumb {
-        background-color: #ffffff39;
-        width: 0.1rem;
-        border-radius: 1rem;
-      }
-    }
-    .message {
-      display: flex;
-      align-items: center;
-      .content {
-        max-width: 40%;
-        overflow-wrap: break-word;
-        padding: 1rem;
-        font-size: 1.1rem;
-        border-radius: 1rem;
-        color: #d1d1d1;
-        @media screen and (min-width: 720px) and (max-width: 1080px) {
-          max-width: 70%;
-        }
-      }
-    }
-    .sended {
-      justify-content: flex-end;
-      .content {
-        background-color: rgb(58, 55, 78);
-      }
-    }
-    .recieved {
-      justify-content: flex-start;
-      .content {
-        background-color: rgb(76, 46, 209);
-      }
-    }
-  }
-  .gpNLio{
-  	background-color: rgb(210, 32, 39);
   }
 `;

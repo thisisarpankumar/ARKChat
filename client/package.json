@@ -17,6 +17,8 @@
     "react-toastify": "^8.1.1",
     "socket.io-client": "^4.4.1",
     "styled-components": "^5.3.3",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1",
     "uuid": "^8.3.2",
     "web-vitals": "^2.1.4"
   },
